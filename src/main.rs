@@ -1,4 +1,5 @@
 use maplit::hashmap;
+use std::cmp::max;
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -24,7 +25,50 @@ impl Default for Config {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+/// The overall, padded row and column indices for piece locations.
+/// For example, the topmost piece on a standard board is
+/// `Point { row: 1, column: 13 }`, despite the row only having one piece,
+/// because there are 12 columns to the left in other rows.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Point {
+    row: i32,
+    column: i32,
+}
+
+impl Point {
+    fn new(row: i32, column: i32) -> Self {
+        Self { row, column }
+    }
+}
+
+/// The internal vector-based row and column indices for piece locations.
+/// For example, the topmost piece on a standard board is
+/// `IndexPair { row: 0, column: 0 }`, e.g., `rows[0][0]`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct IndexPair {
+    row: usize,
+    column: usize,
+}
+
+impl IndexPair {
+    fn new(row: usize, column: usize) -> Self {
+        Self { row, column }
+    }
+}
+
+#[derive(Clone, Debug, derive_error::Error, Eq, PartialEq)]
+enum GameError {
+    /// Tried to move piece from wrong player.
+    WrongPlayer,
+    /// Point does not exist on board.
+    OutOfBounds,
+    /// Cannot make it from source point to target point.
+    NoRoute,
+    /// Target point is occupied by another piece.
+    OccupiedTarget,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum Piece {
     Head,
     Tail,
@@ -120,12 +164,117 @@ impl Board {
             println!("{}", row)
         }
     }
+
+    fn take_turn(&mut self, moves: Vec<(Point, Point)>, player: Piece) -> Result<(), GameError> {
+        for (source, target) in moves {
+            self.move_piece(source, target, player)?;
+        }
+        Ok(())
+    }
+
+    fn try_turn(&self, moves: Vec<(Point, Point)>, player: Piece) -> Result<(), GameError> {
+        let mut test_board = self.clone();
+        test_board.take_turn(moves, player)
+    }
+
+    fn get_index_pair(&self, point: Point) -> Option<IndexPair> {
+        let max_pieces_per_row = self.config.player_lines as usize * 3 + 1;
+        let row = self.rows.get(point.row as usize - 1)?;
+        let mut valid_columns = Vec::<usize>::new();
+        if row.len() == 1 {
+            valid_columns.push(max_pieces_per_row);
+        } else {
+            let offset = match row.len() % 2 {
+                0 => 1 + 2 * (row.len() / 2 - 1),
+                _ => 2 * ((row.len() - 1) / 2),
+            };
+            for x in (max_pieces_per_row - offset..=max_pieces_per_row + offset).step_by(2) {
+                valid_columns.push(x);
+            }
+        }
+        Some(IndexPair::new(
+            point.row as usize - 1,
+            valid_columns
+                .iter()
+                .position(|x| *x == point.column as usize)?,
+        ))
+    }
+
+    fn get_piece(&self, point: Point) -> Option<Piece> {
+        let pair = self.get_index_pair(point)?;
+        Some(*(self.rows.get(pair.row)?.get(pair.column)?))
+    }
+
+    fn move_piece(
+        &mut self,
+        source: Point,
+        target: Point,
+        player: Piece,
+    ) -> Result<(), GameError> {
+        if source == target || (source.row - target.row).abs() > 2 {
+            return Err(GameError::NoRoute);
+        }
+
+        let source_piece = self.get_piece(source).ok_or(GameError::OutOfBounds)?;
+        if source_piece != player {
+            return Err(GameError::WrongPlayer);
+        }
+        let target_piece = self.get_piece(target).ok_or(GameError::OutOfBounds)?;
+        if target_piece != Piece::Empty {
+            return Err(GameError::OccupiedTarget);
+        }
+
+        if (source.row - target.row).abs() == 2 {
+            let middle_piece = self
+                .get_piece(Point::new(
+                    max(source.row, target.row) - 1,
+                    max(source.column, target.column) - 1,
+                ))
+                .ok_or(GameError::OutOfBounds)?;
+            if middle_piece == Piece::Empty {
+                return Err(GameError::NoRoute);
+            }
+        }
+
+        let source_indices = self.get_index_pair(source).ok_or(GameError::OutOfBounds)?;
+        let target_indices = self.get_index_pair(target).ok_or(GameError::OutOfBounds)?;
+        self.rows[source_indices.row][source_indices.column] = Piece::Empty;
+        self.rows[target_indices.row][target_indices.column] = player;
+        Ok(())
+    }
+
+    fn try_move_piece(
+        &self,
+        source: Point,
+        target: Point,
+        player: Piece,
+    ) -> Result<(), GameError> {
+        let mut test_board = self.clone();
+        test_board.move_piece(source, target, player)
+    }
 }
 
-fn main() {
+impl Default for Board {
+    fn default() -> Self {
+        Self::new(Config::default())
+    }
+}
+
+fn main() -> Result<(), Box<std::error::Error>> {
     let config = Config::default();
-    let board = Board::new(config);
+    let mut board = Board::new(config);
     board.draw();
+
+    for (moves, player) in vec![
+        (vec![(Point::new(4, 10), Point::new(5, 11))], Piece::Head),
+        (vec![(Point::new(5, 11), Point::new(6, 12))], Piece::Head),
+    ] {
+        board.take_turn(moves, player)?;
+        println!();
+        board.draw();
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -133,7 +282,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_small_board() {
+    fn test_new_small_board() {
         use Piece::*;
         assert_eq!(
             Board::new(Config {
@@ -157,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn test_standard_board() {
+    fn test_new_standard_board() {
         use Piece::*;
         assert_eq!(
             Board::new(Config::default()),
@@ -246,5 +395,102 @@ mod tests {
                 "              2",
             ],
         );
+    }
+
+    #[test]
+    fn test_try_move_piece_with_success() {
+        let board = Board::default();
+        assert_eq!(
+            board.try_move_piece(Point::new(4, 10), Point::new(5, 11), Piece::Head),
+            Ok(()),
+        );
+    }
+
+    #[test]
+    fn test_try_move_piece_with_no_route_because_too_far() {
+        let board = Board::default();
+        assert_eq!(
+            board.try_move_piece(Point::new(1, 13), Point::new(7, 13), Piece::Head),
+            Err(GameError::NoRoute),
+        );
+    }
+
+    #[test]
+    fn test_try_move_piece_with_no_route_because_no_middle_piece() {
+        let board = Board::default();
+        assert_eq!(
+            board.try_move_piece(Point::new(4, 10), Point::new(6, 12), Piece::Head),
+            Err(GameError::NoRoute),
+        );
+    }
+
+    #[test]
+    fn test_try_move_piece_with_target_occupied() {
+        let board = Board::default();
+        assert_eq!(
+            board.try_move_piece(Point::new(1, 13), Point::new(2, 12), Piece::Head),
+            Err(GameError::OccupiedTarget),
+        );
+    }
+
+    #[test]
+    fn test_try_move_piece_with_out_of_bounds() {
+        let board = Board::default();
+        assert_eq!(
+            board.try_move_piece(Point::new(1, 13), Point::new(1, 12), Piece::Head),
+            Err(GameError::OutOfBounds),
+        );
+    }
+
+    #[test]
+    fn test_try_move_piece_with_wrong_player() {
+        let board = Board::default();
+        assert_eq!(
+            board.try_move_piece(Point::new(4, 10), Point::new(5, 11), Piece::Tail),
+            Err(GameError::WrongPlayer),
+        );
+    }
+
+    #[test]
+    fn test_get_piece_from_board_with_even_player_lines() {
+        let board = Board::default();
+
+        // Out of bounds.
+        assert_eq!(board.get_piece(Point::new(1, 1)), None);
+        assert_eq!(board.get_piece(Point::new(1, 12)), None);
+
+        // Row with odd number of pieces.
+        assert_eq!(board.get_piece(Point::new(1, 13)), Some(Piece::Head));
+        assert_eq!(board.get_piece(Point::new(5, 17)), Some(Piece::Empty));
+        assert_eq!(board.get_piece(Point::new(5, 19)), Some(Piece::RightHand));
+
+        // Row with even number of pieces.
+        assert_eq!(board.get_piece(Point::new(2, 12)), Some(Piece::Head));
+        assert_eq!(board.get_piece(Point::new(6, 2)), Some(Piece::LeftHand));
+        assert_eq!(board.get_piece(Point::new(6, 6)), Some(Piece::LeftHand));
+        assert_eq!(board.get_piece(Point::new(6, 8)), Some(Piece::Empty));
+    }
+
+    #[test]
+    fn test_get_piece_from_board_with_odd_player_lines() {
+        let board = Board::new(Config {
+            player_lines: 3,
+            ..Default::default()
+        });
+
+        // Out of bounds.
+        assert_eq!(board.get_piece(Point::new(1, 1)), None);
+        assert_eq!(board.get_piece(Point::new(1, 12)), None);
+
+        // Row with odd number of pieces.
+        assert_eq!(board.get_piece(Point::new(1, 10)), Some(Piece::Head));
+        assert_eq!(board.get_piece(Point::new(6, 15)), Some(Piece::Empty));
+        assert_eq!(board.get_piece(Point::new(6, 17)), Some(Piece::RightHand));
+
+        // Row with even number of pieces.
+        assert_eq!(board.get_piece(Point::new(2, 9)), Some(Piece::Head));
+        assert_eq!(board.get_piece(Point::new(4, 1)), Some(Piece::LeftHand));
+        assert_eq!(board.get_piece(Point::new(4, 5)), Some(Piece::LeftHand));
+        assert_eq!(board.get_piece(Point::new(4, 7)), Some(Piece::Empty));
     }
 }

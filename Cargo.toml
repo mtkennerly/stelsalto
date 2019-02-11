@@ -5,4 +5,5 @@ authors = ["mtkennerly <mtkennerly@gmail.com>"]
 edition = "2018"
 
 [dependencies]
+derive-error = "0.0.4"
 maplit = "1.0.1"
