@@ -66,6 +66,8 @@ enum GameError {
     NoRoute,
     /// Target point is occupied by another piece.
     OccupiedTarget,
+    /// Attempt to mix single spot movement and jump chains in one turn.
+    Exhausted,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -150,7 +152,7 @@ impl Board {
             .map(|row| {
                 format!(
                     "{}{}",
-                    " ".repeat(self.config.player_lines as usize * 3 + 2 - row.len()),
+                    " ".repeat(self.config.player_lines as usize * 3 + 1 - row.len()),
                     row.iter()
                         .map(|piece| format!(" {}", self.config.symbols[piece]))
                         .collect::<String>(),
@@ -165,16 +167,33 @@ impl Board {
         }
     }
 
-    fn take_turn(&mut self, moves: Vec<(Point, Point)>, player: Piece) -> Result<(), GameError> {
-        for (source, target) in moves {
-            self.move_piece(source, target, player)?;
+    fn take_turn(&mut self, points: Vec<Point>, player: Piece) -> Result<(), GameError> {
+        if points.len() < 2 {
+            return Err(GameError::NoRoute);
+        }
+        if points.len() > 2 {
+            let mut distances = Vec::<i32>::new();
+            for (index, point) in points[1..].iter().enumerate() {
+                let previous_point = points[index];
+                let distance = match point.row - previous_point.row {
+                    0 => (point.column - previous_point.column).abs() / 2,
+                    x => x.abs(),
+                };
+                distances.push(distance);
+            }
+            if distances.len() > 1 && distances.iter().any(|x| *x != 2) {
+                return Err(GameError::Exhausted);
+            }
+        }
+        for (index, point) in points[1..].iter().enumerate() {
+            self.move_piece(points[index], *point, player)?;
         }
         Ok(())
     }
 
-    fn try_turn(&self, moves: Vec<(Point, Point)>, player: Piece) -> Result<(), GameError> {
+    fn try_turn(&self, points: Vec<Point>, player: Piece) -> Result<(), GameError> {
         let mut test_board = self.clone();
-        test_board.take_turn(moves, player)
+        test_board.take_turn(points, player)
     }
 
     fn get_index_pair(&self, point: Point) -> Option<IndexPair> {
@@ -205,13 +224,12 @@ impl Board {
         Some(*(self.rows.get(pair.row)?.get(pair.column)?))
     }
 
-    fn move_piece(
-        &mut self,
-        source: Point,
-        target: Point,
-        player: Piece,
-    ) -> Result<(), GameError> {
-        if source == target || (source.row - target.row).abs() > 2 {
+    fn move_piece(&mut self, source: Point, target: Point, player: Piece) -> Result<(), GameError> {
+        let distance = match source.row - target.row {
+            0 => (source.column - target.column).abs() / 2,
+            x => x.abs(),
+        };
+        if source == target || distance > 2 {
             return Err(GameError::NoRoute);
         }
 
@@ -224,7 +242,7 @@ impl Board {
             return Err(GameError::OccupiedTarget);
         }
 
-        if (source.row - target.row).abs() == 2 {
+        if distance == 2 {
             let middle_piece = self
                 .get_piece(Point::new(
                     max(source.row, target.row) - 1,
@@ -243,12 +261,7 @@ impl Board {
         Ok(())
     }
 
-    fn try_move_piece(
-        &self,
-        source: Point,
-        target: Point,
-        player: Piece,
-    ) -> Result<(), GameError> {
+    fn try_move_piece(&self, source: Point, target: Point, player: Piece) -> Result<(), GameError> {
         let mut test_board = self.clone();
         test_board.move_piece(source, target, player)
     }
@@ -266,8 +279,12 @@ fn main() -> Result<(), Box<std::error::Error>> {
     board.draw();
 
     for (moves, player) in vec![
-        (vec![(Point::new(4, 10), Point::new(5, 11))], Piece::Head),
-        (vec![(Point::new(5, 11), Point::new(6, 12))], Piece::Head),
+        (vec![Point::new(4, 10), Point::new(5, 11)], Piece::Head),
+        (vec![Point::new(14, 16), Point::new(13, 15)], Piece::Tail),
+        (
+            vec![Point::new(3, 11), Point::new(5, 13), Point::new(5, 9)],
+            Piece::Head,
+        ),
     ] {
         board.take_turn(moves, player)?;
         println!();
@@ -367,7 +384,7 @@ mod tests {
                 ..Config::default()
             })
             .serialize(),
-            vec!["     1", "  3 . . 5", "   . . .", "  6 . . 4", "     2"],
+            vec!["    1", " 3 . . 5", "  . . .", " 6 . . 4", "    2"],
         );
     }
 
@@ -376,23 +393,23 @@ mod tests {
         assert_eq!(
             Board::new(Config::default()).serialize(),
             vec![
-                "              1",
-                "             1 1",
-                "            1 1 1",
-                "           1 1 1 1",
-                "  3 3 3 3 . . . . . 5 5 5 5",
-                "   3 3 3 . . . . . . 5 5 5",
-                "    3 3 . . . . . . . 5 5",
-                "     3 . . . . . . . . 5",
-                "      . . . . . . . . .",
-                "     6 . . . . . . . . 4",
-                "    6 6 . . . . . . . 4 4",
-                "   6 6 6 . . . . . . 4 4 4",
-                "  6 6 6 6 . . . . . 4 4 4 4",
-                "           2 2 2 2",
-                "            2 2 2",
-                "             2 2",
-                "              2",
+                "             1",
+                "            1 1",
+                "           1 1 1",
+                "          1 1 1 1",
+                " 3 3 3 3 . . . . . 5 5 5 5",
+                "  3 3 3 . . . . . . 5 5 5",
+                "   3 3 . . . . . . . 5 5",
+                "    3 . . . . . . . . 5",
+                "     . . . . . . . . .",
+                "    6 . . . . . . . . 4",
+                "   6 6 . . . . . . . 4 4",
+                "  6 6 6 . . . . . . 4 4 4",
+                " 6 6 6 6 . . . . . 4 4 4 4",
+                "          2 2 2 2",
+                "           2 2 2",
+                "            2 2",
+                "             2",
             ],
         );
     }
@@ -448,6 +465,51 @@ mod tests {
         assert_eq!(
             board.try_move_piece(Point::new(4, 10), Point::new(5, 11), Piece::Tail),
             Err(GameError::WrongPlayer),
+        );
+    }
+
+    #[test]
+    fn test_try_turn_with_success_on_single_move() {
+        let board = Board::default();
+        assert_eq!(
+            board.try_turn(vec![Point::new(4, 10), Point::new(5, 11)], Piece::Head,),
+            Ok(()),
+        );
+    }
+
+    #[test]
+    fn test_try_turn_with_success_on_single_jump() {
+        let board = Board::default();
+        assert_eq!(
+            board.try_turn(vec![Point::new(3, 11), Point::new(5, 13)], Piece::Head,),
+            Ok(()),
+        );
+    }
+
+    #[test]
+    fn test_try_turn_with_success_on_multiple_jumps() {
+        let mut board = Board::default();
+        board
+            .move_piece(Point::new(4, 10), Point::new(5, 11), Piece::Head)
+            .unwrap();
+        assert_eq!(
+            board.try_turn(
+                vec![Point::new(3, 11), Point::new(5, 13), Point::new(5, 9)],
+                Piece::Head,
+            ),
+            Ok(()),
+        );
+    }
+
+    #[test]
+    fn test_try_turn_with_exhaustion() {
+        let board = Board::default();
+        assert_eq!(
+            board.try_turn(
+                vec![Point::new(4, 10), Point::new(5, 11), Point::new(6, 12)],
+                Piece::Head,
+            ),
+            Err(GameError::Exhausted),
         );
     }
 
