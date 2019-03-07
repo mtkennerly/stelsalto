@@ -3,6 +3,10 @@ name = "stelsalto"
 version = "0.1.0"
 authors = ["mtkennerly <mtkennerly@gmail.com>"]
 edition = "2018"
+description = "Engine for Sternhalma (a.k.a. Chinese checkers)"
+repository = "https://github.com/mtkennerly/stelsalto"
+readme = "README.md"
+license = "MIT"
 
 [dependencies]
 derive-error = "0.0.4"
