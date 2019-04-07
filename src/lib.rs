@@ -224,7 +224,12 @@ impl Board {
         Some(*(self.rows.get(pair.row)?.get(pair.column)?))
     }
 
-    pub fn move_piece(&mut self, source: Point, target: Point, player: Piece) -> Result<(), GameError> {
+    pub fn move_piece(
+        &mut self,
+        source: Point,
+        target: Point,
+        player: Piece,
+    ) -> Result<(), GameError> {
         let distance = match source.row - target.row {
             0 => (source.column - target.column).abs() / 2,
             x => x.abs(),
@@ -261,15 +266,105 @@ impl Board {
         Ok(())
     }
 
-    pub fn try_move_piece(&self, source: Point, target: Point, player: Piece) -> Result<(), GameError> {
+    pub fn try_move_piece(
+        &self,
+        source: Point,
+        target: Point,
+        player: Piece,
+    ) -> Result<(), GameError> {
         let mut test_board = self.clone();
         test_board.move_piece(source, target, player)
+    }
+
+    pub fn has_player_won(&self, piece: Piece) -> bool {
+        let pl = self.config.player_lines as usize;
+        let (reversed, increasing, start) = match piece {
+            Piece::Head => (false, false, pl * 3 + 1),
+            Piece::LeftHand => (true, true, pl * 2 + 1),
+            Piece::RightHand => (false, true, pl * 2 + 1),
+            Piece::LeftFoot => (true, false, pl),
+            Piece::RightFoot => (false, false, pl),
+            Piece::Tail => (false, true, 0),
+            Piece::Empty => return false,
+        };
+        for (n, row) in self.rows[start..start + pl].iter().enumerate() {
+            let offset = match increasing {
+                true => n + 1,
+                false => self.config.player_lines as usize - n,
+            };
+            let row_part: Vec<&Piece> = {
+                match reversed {
+                    true => row.iter().rev().take(offset).collect(),
+                    false => row.iter().take(offset).collect(),
+                }
+            };
+            if row_part.iter().any(|x| *x != &piece) {
+                return false;
+            }
+        }
+        true
     }
 }
 
 impl Default for Board {
     fn default() -> Self {
         Self::new(Config::default())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Game {
+    pub board: Board,
+    pieces: Vec<Piece>,
+}
+
+impl Game {
+    pub fn new(board: Board, pieces: Vec<Piece>) -> Self {
+        Self {
+            board,
+            pieces,
+        }
+    }
+
+    pub fn play(&mut self) -> Result<(), GameError> {
+        let turns = vec![
+            vec![Point::new(4, 10), Point::new(5, 11)],   // Head
+            vec![Point::new(14, 16), Point::new(13, 15)], // Tail
+            vec![Point::new(3, 11), Point::new(5, 13), Point::new(5, 9)], // Head
+        ];
+
+        let mut total_rounds = 0;
+        let mut total_turns = 0;
+        let mut playing = self.pieces.clone();
+        let mut victorious = Vec::<Piece>::new();
+
+        'outer: while playing.len() > 1 {
+            for piece in playing.clone() {
+                if total_turns >= turns.len() {
+                    break 'outer;
+                }
+
+                println!("\nNext turn by {:?}\n", &piece);
+                let turn = turns.clone()[total_turns].clone();
+                self.board.take_turn(turn, piece)?;
+                self.board.draw();
+                if self.board.has_player_won(piece) {
+                    println!("\nPlayer {:?} has finished\n", &piece);
+                    playing.retain(|x| x != &piece);
+                    victorious.push(piece);
+                    if playing.len() < 2 {
+                        break 'outer;
+                    }
+                }
+
+                total_turns += 1;
+            }
+            total_rounds += 1;
+        }
+
+        println!("\nThe game is over!");
+        println!("It lasted {} rounds", total_rounds + 1);
+        Ok(())
     }
 }
 
@@ -286,12 +381,13 @@ mod tests {
                 ..Config::default()
             }),
             Board {
+                #[cfg_attr(rustfmt, rustfmt_skip)]
                 rows: vec![
-                    vec![Head],
-                    vec![LeftHand, Empty, Empty, RightHand],
-                    vec![Empty, Empty, Empty],
-                    vec![LeftFoot, Empty, Empty, RightFoot],
-                    vec![Tail]
+                    vec![              Head                 ],
+                    vec![ LeftHand, Empty, Empty, RightHand ],
+                    vec![       Empty, Empty, Empty         ],
+                    vec![ LeftFoot, Empty, Empty, RightFoot ],
+                    vec![              Tail                 ]
                 ],
                 config: Config {
                     player_lines: 1,
@@ -304,51 +400,33 @@ mod tests {
     #[test]
     fn test_new_standard_board() {
         use Piece::*;
+        let e = Empty;
+        let lhand = LeftHand;
+        let rhand = RightHand;
+        let lfoot = LeftFoot;
+        let rfoot = RightFoot;
         assert_eq!(
             Board::new(Config::default()),
             Board {
+                #[cfg_attr(rustfmt, rustfmt_skip)]
                 rows: vec![
-                    vec![Head],
-                    vec![Head, Head],
-                    vec![Head, Head, Head],
-                    vec![Head, Head, Head, Head],
-                    vec![
-                        LeftHand, LeftHand, LeftHand, LeftHand, Empty, Empty, Empty, Empty, Empty,
-                        RightHand, RightHand, RightHand, RightHand,
-                    ],
-                    vec![
-                        LeftHand, LeftHand, LeftHand, Empty, Empty, Empty, Empty, Empty, Empty,
-                        RightHand, RightHand, RightHand,
-                    ],
-                    vec![
-                        LeftHand, LeftHand, Empty, Empty, Empty, Empty, Empty, Empty, Empty,
-                        RightHand, RightHand,
-                    ],
-                    vec![
-                        LeftHand, Empty, Empty, Empty, Empty, Empty, Empty, Empty, Empty,
-                        RightHand,
-                    ],
-                    vec![Empty, Empty, Empty, Empty, Empty, Empty, Empty, Empty, Empty],
-                    vec![
-                        LeftFoot, Empty, Empty, Empty, Empty, Empty, Empty, Empty, Empty,
-                        RightFoot,
-                    ],
-                    vec![
-                        LeftFoot, LeftFoot, Empty, Empty, Empty, Empty, Empty, Empty, Empty,
-                        RightFoot, RightFoot,
-                    ],
-                    vec![
-                        LeftFoot, LeftFoot, LeftFoot, Empty, Empty, Empty, Empty, Empty, Empty,
-                        RightFoot, RightFoot, RightFoot,
-                    ],
-                    vec![
-                        LeftFoot, LeftFoot, LeftFoot, LeftFoot, Empty, Empty, Empty, Empty, Empty,
-                        RightFoot, RightFoot, RightFoot, RightFoot,
-                    ],
-                    vec![Tail, Tail, Tail, Tail],
-                    vec![Tail, Tail, Tail],
-                    vec![Tail, Tail],
-                    vec![Tail]
+                    vec![                                 Head                                  ],
+                    vec![                              Head, Head                               ],
+                    vec![                           Head, Head, Head                            ],
+                    vec![                        Head, Head, Head, Head                         ],
+                    vec![ lhand, lhand, lhand, lhand, e, e, e, e, e, rhand, rhand, rhand, rhand ],
+                    vec![      lhand, lhand, lhand, e, e, e, e, e, e, rhand, rhand, rhand       ],
+                    vec![           lhand, lhand, e, e, e, e, e, e, e, rhand, rhand             ],
+                    vec![                lhand, e, e, e, e, e, e, e, e, rhand                   ],
+                    vec![                     e, e, e, e, e, e, e, e, e                         ],
+                    vec![                lfoot, e, e, e, e, e, e, e, e, rfoot                   ],
+                    vec![           lfoot, lfoot, e, e, e, e, e, e, e, rfoot, rfoot             ],
+                    vec![      lfoot, lfoot, lfoot, e, e, e, e, e, e, rfoot, rfoot, rfoot       ],
+                    vec![ lfoot, lfoot, lfoot, lfoot, e, e, e, e, e, rfoot, rfoot, rfoot, rfoot ],
+                    vec![                        Tail, Tail, Tail, Tail                         ],
+                    vec![                           Tail, Tail, Tail                            ],
+                    vec![                              Tail, Tail                               ],
+                    vec![                                 Tail                                  ],
                 ],
                 config: Config::default(),
             }
@@ -533,5 +611,65 @@ mod tests {
         assert_eq!(board.get_piece(Point::new(4, 1)), Some(Piece::LeftHand));
         assert_eq!(board.get_piece(Point::new(4, 5)), Some(Piece::LeftHand));
         assert_eq!(board.get_piece(Point::new(4, 7)), Some(Piece::Empty));
+    }
+
+    #[test]
+    fn test_has_player_won_yes() {
+        use Piece::*;
+        let e = Empty;
+        let board = Board {
+            #[cfg_attr(rustfmt, rustfmt_skip)]
+            rows: vec![
+                vec![                        Tail                       ],
+                vec![                     Tail, Tail                    ],
+                vec![ RightFoot, RightFoot, e, e, e, LeftFoot, LeftFoot ],
+                vec![          RightFoot, e, e, e, e, LeftFoot          ],
+                vec![                   e, e, e, e, e                   ],
+                vec![          RightHand, e, e, e, e, LeftHand          ],
+                vec![ RightHand, RightHand, e, e, e, LeftHand, LeftHand ],
+                vec![                     Head, Head                    ],
+                vec![                        Head                       ],
+            ],
+            config: Config {
+                player_lines: 2,
+                ..Default::default()
+            },
+        };
+        assert!(board.has_player_won(Head));
+        assert!(board.has_player_won(LeftHand));
+        assert!(board.has_player_won(RightHand));
+        assert!(board.has_player_won(LeftFoot));
+        assert!(board.has_player_won(RightFoot));
+        assert!(board.has_player_won(Tail));
+    }
+
+    #[test]
+    fn test_has_player_won_no() {
+        use Piece::*;
+        let e = Empty;
+        let board = Board {
+            #[cfg_attr(rustfmt, rustfmt_skip)]
+            rows: vec![
+                vec![                        Head                       ],
+                vec![                     Tail, Tail                    ],
+                vec![ LeftHand, RightFoot, e, e, e, LeftFoot, RightHand ],
+                vec![          RightFoot, e, e, e, e, LeftFoot          ],
+                vec![                   e, e, e, e, e                   ],
+                vec![          RightHand, e, e, e, e, LeftHand          ],
+                vec![ LeftFoot, RightHand, e, e, e, LeftHand, RightFoot ],
+                vec![                     Head, Head                    ],
+                vec![                        Tail                       ],
+            ],
+            config: Config {
+                player_lines: 2,
+                ..Default::default()
+            },
+        };
+        assert!(!board.has_player_won(Head));
+        assert!(!board.has_player_won(LeftHand));
+        assert!(!board.has_player_won(RightHand));
+        assert!(!board.has_player_won(LeftFoot));
+        assert!(!board.has_player_won(RightFoot));
+        assert!(!board.has_player_won(Tail));
     }
 }
